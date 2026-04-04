@@ -1,0 +1,21 @@
+# Input data — never commit raw tiles or observation CSVs
+*.hgt
+*.hgt.zip
+input/
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+
+# Poetry / packaging
+dist/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea

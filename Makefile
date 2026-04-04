@@ -1,0 +1,66 @@
+DATA ?= input
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Help
+# ─────────────────────────────────────────────────────────────────────────────
+
+.PHONY: help
+help:
+	@echo ""
+	@echo "Usage: make <target> [DATA=~/path/to/data-dir]"
+	@echo ""
+	@echo "  DATA defaults to ./input — place SE.zip and .hgt tiles there,"
+	@echo "  or override with DATA=~/path/to/your/data-dir"
+	@echo ""
+	@echo "Setup"
+	@echo "  install       Install Python dependencies via Poetry"
+	@echo ""
+	@echo "Elevation pipeline"
+	@echo "  elevation     Parse SE.zip + SRTM tiles → output/postcodes-enriched.json"
+	@echo ""
+	@echo "SMHI pipeline"
+	@echo "  smhi          Run all four SMHI steps in order"
+	@echo "  smhi-stations     Step 1: fetch active station list"
+	@echo "  smhi-obs          Step 2: download 30 years of observations (slow)"
+	@echo "  smhi-normals      Step 3: derive climate normals from CSVs"
+	@echo "  smhi-validate     Step 4: validate output before committing"
+	@echo ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Setup
+# ─────────────────────────────────────────────────────────────────────────────
+
+.PHONY: install
+install:
+	poetry install
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Elevation pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+.PHONY: elevation
+elevation:
+	poetry run python elevation/fetch_elevations.py --data $(DATA)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SMHI pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+.PHONY: smhi-stations
+smhi-stations:
+	poetry run python smhi/fetch_stations.py
+
+.PHONY: smhi-obs
+smhi-obs:
+	poetry run python smhi/fetch_observations.py
+
+.PHONY: smhi-normals
+smhi-normals:
+	poetry run python smhi/derive_normals.py
+
+.PHONY: smhi-validate
+smhi-validate:
+	poetry run python smhi/validate.py
+
+.PHONY: smhi
+smhi: smhi-stations smhi-obs smhi-normals smhi-validate
