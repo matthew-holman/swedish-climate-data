@@ -19,9 +19,10 @@ help:
 	@echo "  elevation     Parse SE.zip + SRTM tiles → output/postcodes-enriched.json"
 	@echo ""
 	@echo "SMHI pipeline"
-	@echo "  smhi          Run all four SMHI steps in order"
+	@echo "  smhi              Run all four SMHI steps in order"
 	@echo "  smhi-stations     Step 1: fetch active station list"
-	@echo "  smhi-obs          Step 2: download 30 years of observations (slow)"
+	@echo "  smhi-obs          Step 2: download observations from SMHI API (slow)"
+	@echo "  smhi-fake-obs     Step 2 (alt): generate synthetic observations for dev/testing"
 	@echo "  smhi-normals      Step 3: derive climate normals from CSVs"
 	@echo "  smhi-validate     Step 4: validate output before committing"
 	@echo ""
@@ -53,6 +54,10 @@ smhi-stations:
 .PHONY: smhi-obs
 smhi-obs:
 	poetry run python smhi/fetch_observations.py
+
+.PHONY: smhi-fake-obs
+smhi-fake-obs:
+	poetry run python smhi/fetch_fake_observations.py
 
 .PHONY: smhi-normals
 smhi-normals:

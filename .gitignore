@@ -3,6 +3,7 @@
 *.hgt.zip
 input/
 output/
+data/
 
 # Python
 __pycache__/

@@ -87,13 +87,13 @@ Only commit `output/weather_stations.json` after `validate.py` passes cleanly.
 
 ## Climate derivation methodology
 
-**Last spring frost:** per station per year, the last calendar day where daily minimum temperature drops below 0°C. Median across 30 years gives `last_frost_doy`.
+**Last spring frost:** per station per year, the last calendar day where daily minimum temperature drops below 0°C. Median across the climate window gives `last_frost_doy`.
 
-**First autumn frost:** per station per year, the first calendar day after July 1st where daily minimum temperature drops below 0°C. Median across 30 years gives `first_frost_doy`.
+**First autumn frost:** per station per year, the first calendar day after July 1st where daily minimum temperature drops below 0°C. Median across the climate window gives `first_frost_doy`.
 
-**Growing degree days:** per station per year, sum of (daily mean temperature − 5°C) for all days where daily mean exceeds 5°C. Mean across 30 years gives `gdd_annual`.
+**Growing degree days:** per station per year, sum of (daily mean temperature − 5°C) for all days where daily mean exceeds 5°C. Mean across the climate window gives `gdd_annual`.
 
-**Monthly mean temperatures:** per station, mean of daily mean temperature for each calendar month across 30 years. Stored as an array of 12 values indexed 0–11 (January–December).
+**Monthly mean temperatures:** per station, mean of daily mean temperature for each calendar month across the climate window. Stored as an array of 12 values indexed 0–11 (January–December).
 
 Soil temperature is not stored. It is derived at query time in grow-zone-api using a 7-day rolling mean of daily mean air temperature plus a 1.5°C correction factor.
 
@@ -105,7 +105,7 @@ Soil temperature is not stored. It is derived at query time in grow-zone-api usi
 
 **SMHI open data:** https://opendata.smhi.se/apidocs/metobs/ — no API key required. Be a good citizen — add delays between requests.
 
-**Normal period:** 1991–2020 (current WMO standard). Refresh when SMHI publishes 2001–2030 normals.
+**Climate window:** current year − 15 through current year − 1, derived at runtime. This rolling window is chosen over the fixed WMO 1991–2020 normal period to maximise station coverage across Sweden and keep the data representative of present-day climate. Re-running the pipeline annually automatically advances the window.
 
 ## Conventions
 
