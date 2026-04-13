@@ -39,6 +39,8 @@ from pathlib import Path
 
 import requests
 
+from smhi.types import Station
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 BASE_URL = "https://opendata-download-metobs.smhi.se/api/version/1.0"
@@ -55,7 +57,8 @@ _now          = datetime.now(tz=timezone.utc)
 NORMAL_START  = datetime(_now.year - 15, 1,  1,  tzinfo=timezone.utc)
 NORMAL_END    = datetime(_now.year - 1,  12, 31, tzinfo=timezone.utc)
 
-OUTPUT_PATH = Path("data/stations.json")
+ROOT        = Path(__file__).parent.parent
+OUTPUT_PATH = ROOT / "data/stations.json"
 
 # ─── API ──────────────────────────────────────────────────────────────────────
 
@@ -125,14 +128,14 @@ def main() -> None:
         sys.exit(1)
 
     # Build output records
-    records = [
-        {
-            "id":         s["id"],
-            "name":       s["name"],
-            "lat":        s["latitude"],
-            "lng":        s["longitude"],
-            "elevationM": s["height"],
-        }
+    records: list[Station] = [
+        Station(
+            id=s["id"],
+            name=s["name"],
+            lat=s["latitude"],
+            lng=s["longitude"],
+            elevationM=s["height"],
+        )
         for s in qualifying
     ]
 

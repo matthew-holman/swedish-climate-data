@@ -44,6 +44,8 @@ from pathlib import Path
 
 import requests
 
+from smhi.types import Station
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 BASE_URL = "https://opendata-download-metobs.smhi.se/api/version/1.0"
@@ -56,8 +58,9 @@ _now           = datetime.now(tz=timezone.utc)
 WINDOW_START   = f"{_now.year - 15}-01-01"
 WINDOW_END     = f"{_now.year - 1}-12-31"
 
-STATIONS_PATH  = Path("data/stations.json")
-OBS_DIR        = Path("data/observations")
+ROOT           = Path(__file__).parent.parent
+STATIONS_PATH  = ROOT / "data/stations.json"
+OBS_DIR        = ROOT / "data/observations"
 
 REQUEST_DELAY  = 0.5  # seconds between API calls — be a good citizen
 
@@ -174,7 +177,7 @@ def main() -> None:
         sys.exit(1)
 
     import json
-    stations = json.loads(STATIONS_PATH.read_text(encoding="utf-8"))
+    stations: list[Station] = json.loads(STATIONS_PATH.read_text(encoding="utf-8"))
     OBS_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"Climate window : {WINDOW_START} – {WINDOW_END}")

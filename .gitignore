@@ -2,7 +2,6 @@
 *.hgt
 *.hgt.zip
 input/
-output/
 data/
 
 # Python

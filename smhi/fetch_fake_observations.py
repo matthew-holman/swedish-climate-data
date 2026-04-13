@@ -49,6 +49,8 @@ Usage:
 
 import csv
 import json
+
+from smhi.types import Station
 import math
 import random
 import sys
@@ -62,8 +64,9 @@ _now         = datetime.now(tz=timezone.utc)
 WINDOW_START = date(_now.year - 15, 1, 1)
 WINDOW_END   = date(_now.year - 1, 12, 31)
 
-STATIONS_PATH = Path("data/stations.json")
-OBS_DIR       = Path("data/observations")
+ROOT          = Path(__file__).parent.parent
+STATIONS_PATH = ROOT / "data/stations.json"
+OBS_DIR       = ROOT / "data/observations"
 
 # ─── Temperature model ────────────────────────────────────────────────────────
 
@@ -115,7 +118,7 @@ def main() -> None:
         print("Run fetch_stations.py first.", file=sys.stderr)
         sys.exit(1)
 
-    stations = json.loads(STATIONS_PATH.read_text(encoding="utf-8"))
+    stations: list[Station] = json.loads(STATIONS_PATH.read_text(encoding="utf-8"))
     OBS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Build the full date range once

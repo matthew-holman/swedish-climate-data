@@ -1,4 +1,5 @@
 DATA ?= input
+export PYTHONPATH := $(shell pwd)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Help
@@ -19,7 +20,8 @@ help:
 	@echo "  elevation     Parse SE.zip + SRTM tiles → output/postcodes-enriched.json"
 	@echo ""
 	@echo "SMHI pipeline"
-	@echo "  smhi              Run all four SMHI steps in order"
+	@echo "  smhi              Run full pipeline (real SMHI observations)"
+	@echo "  smhi-fake         Run full pipeline with synthetic observations"
 	@echo "  smhi-stations     Step 1: fetch active station list"
 	@echo "  smhi-obs          Step 2: download observations from SMHI API (slow)"
 	@echo "  smhi-fake-obs     Step 2 (alt): generate synthetic observations for dev/testing"
@@ -68,4 +70,9 @@ smhi-validate:
 	poetry run python smhi/validate.py
 
 .PHONY: smhi
-smhi: smhi-stations smhi-obs smhi-normals smhi-validate
+smhi:
+	poetry run python smhi/run_pipeline.py
+
+.PHONY: smhi-fake
+smhi-fake:
+	poetry run python smhi/run_pipeline.py --fake

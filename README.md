@@ -26,10 +26,60 @@ Both files are committed to the repository after a successful pipeline run.
 
 ## Setup
 
+### 1. Install Poetry
+
+If you don't have Poetry installed:
+
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+```
+
+Verify it's on your PATH:
+
+```bash
+poetry --version
+```
+
+If the command isn't found, add Poetry to your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### 2. Configure Poetry to create a local virtualenv
+
+This project uses a `poetry.toml` file that tells Poetry to create the virtualenv inside the project directory (`.venv/`). This keeps the environment isolated to this project and avoids conflicts with your global Poetry settings.
+
+> **If you see `Path: NA` when running `poetry env info`**, your global Poetry config has `virtualenvs.create = false`. The `poetry.toml` in this repo overrides that — but you must run `poetry install` from inside the project directory for it to take effect.
+
+### 3. Clone and install
+
 ```bash
 git clone <repo-url>
 cd swedish-climate-data
-make install
+poetry install
+```
+
+Poetry will create a `.venv/` inside the project directory and install all dependencies into it. Verify it worked:
+
+```bash
+poetry env info
+# "Path" should point to a valid virtualenv — not "NA"
+
+poetry run python -c "import requests, pandas, numpy; print('ok')"
+# Should print: ok
+```
+
+### 4. Running scripts
+
+Always prefix commands with `poetry run` (or use the `make` targets which do this automatically):
+
+```bash
+# Via make (recommended)
+make smhi-fake
+
+# Or directly
+poetry run python smhi/fetch_stations.py
 ```
 
 ---
