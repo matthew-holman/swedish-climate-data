@@ -13,16 +13,35 @@ is committed. Checks fall into four categories:
   4. Consistency   — internal relationships hold (e.g. first_frost > last_frost,
                      growing_days == first - last, seasonal curve shape)
 
-NOTE: Reference-value checks against published SMHI normals are intentionally
-omitted until the SMHI corrected-archive API is restored and real observation
-data can be used. The checks here focus on structural and logical correctness.
+Reference-data validation (run_reference_checks) adds five further groups:
+  5. Internal consistency — per-station tighter bounds and temperature curve
+  6. Reference stations   — hard-coded validated ranges for three anchor stations
+  7. Regional coverage    — at least 3 stations per geographic region
+  8. GDD gradient         — SLU latitude/elevation gradient (warnings only)
+  9. North-south ordering — GDD inversions between distant stations (warnings only)
 
-Exits with code 0 if all checks pass, code 1 if any fail.
+Exits with code 0 if there are no failures (warnings are acceptable).
+Exits with code 1 if any failure is present.
 
 Usage:
     python smhi/validate.py
     make smhi-validate
 """
+
+# Validation thresholds and gradient coefficients are derived from:
+#
+# SLU MarkInfo climate page (https://www.slu.se/markinfo/klimat):
+#   - Temperatursumma decreases 58 degree-days per degree of latitude north
+#   - Temperatursumma decreases 90 degree-days per 100m of elevation
+#
+# Manual cross-validation against SMHI published climate data confirmed
+# for three reference stations spanning Sweden's full climate range:
+#   - Falsterbo A (55.4°N)        — southern maritime extreme
+#   - Stockholm-Bromma (59.4°N)   — central reference
+#   - Kiruna Flygplats (67.8°N)   — northern continental extreme
+#
+# Reference ranges reflect 15-year median values (2011–2025) and should
+# be reviewed if the pipeline's normal period window is changed.
 
 import json
 
@@ -39,6 +58,7 @@ STATIONS_PATH = ROOT / "data/stations.json"
 # ─── Check runner ─────────────────────────────────────────────────────────────
 
 _results: list[tuple[bool, str]] = []
+_warnings: list[str] = []   # non-blocking warnings for human review
 
 
 def check(name: str, passed: bool, detail: str = "") -> bool:
@@ -51,12 +71,19 @@ def check(name: str, passed: bool, detail: str = "") -> bool:
     return passed
 
 
+def warn(detail: str) -> None:
+    _warnings.append(detail)
+
+
 # ─── Checks ───────────────────────────────────────────────────────────────────
 
 REQUIRED_FIELDS = [
     "id", "name", "lat", "lng", "elevationM",
-    "last_frost_doy", "first_frost_doy", "growing_days",
-    "gdd_annual", "monthly_mean_temps",
+    "last_frost_doy", "last_frost_p90",
+    "first_frost_doy", "first_frost_p10",
+    "growing_days",
+    "gdd_annual", "gdd_p10", "gdd_p90", "gdd_cv",
+    "monthly_mean_temps",
 ]
 
 # Sweden bounding box (generous)
@@ -70,6 +97,49 @@ GROWING_DAYS_MIN       = 1
 GDD_MIN, GDD_MAX       = 50.0, 3000.0
 MONTHLY_TEMP_MIN       = -40.0
 MONTHLY_TEMP_MAX       = 35.0
+
+# ─── SLU gradient constants ───────────────────────────────────────────────────
+
+ANCHOR_STATION_ID  = 52240   # Falsterbo A — best-validated against SLU maps
+ANCHOR_LAT         = 55.4
+ANCHOR_GDD         = 2105
+GDD_PER_DEGREE_LAT = 58     # degree-days lost per degree north
+GDD_PER_100M_ELEV  = 90     # degree-days lost per 100m elevation
+GRADIENT_TOLERANCE = 0.30   # 30% — coastal/urban stations legitimately deviate
+
+REFERENCE_STATIONS = [
+    {
+        "id": 52240,
+        "name": "Falsterbo A",
+        "last_frost_doy":  (75,  115),
+        "first_frost_doy": (295, 355),
+        "growing_days":    (195, 265),
+        "gdd_annual":      (1800, 2400),
+    },
+    {
+        "id": 97200,
+        "name": "Stockholm-Bromma Flygplats",
+        "last_frost_doy":  (110, 145),
+        "first_frost_doy": (260, 300),
+        "growing_days":    (130, 175),
+        "gdd_annual":      (1500, 2000),
+    },
+    {
+        "id": 180940,
+        "name": "Kiruna Flygplats",
+        "last_frost_doy":  (140, 170),
+        "first_frost_doy": (235, 270),
+        "growing_days":    (75,  125),
+        "gdd_annual":      (600, 1100),
+    },
+]
+
+REGIONS = {
+    "Götaland (55–58°N)":   lambda s: 55.0 <= s["lat"] < 58.0,
+    "Svealand (58–61°N)":   lambda s: 58.0 <= s["lat"] < 61.0,
+    "Norrland S (61–64°N)": lambda s: 61.0 <= s["lat"] < 64.0,
+    "Norrland N (64–70°N)": lambda s: 64.0 <= s["lat"] <= 70.0,
+}
 
 
 def run_checks(stations: list[WeatherStation], expected_ids: set[int]) -> None:
@@ -246,6 +316,274 @@ def run_checks(stations: list[WeatherStation], expected_ids: set[int]) -> None:
     )
 
 
+# ─── Reference data validation ────────────────────────────────────────────────
+
+def run_reference_checks(stations: list[WeatherStation]) -> None:
+    """Five check groups derived from SLU/SMHI published reference data."""
+
+    print("\nReference data validation")
+    n = len(stations)
+    station_by_id = {s["id"]: s for s in stations}
+
+    # ── 5. Internal consistency (per-station, tighter bounds) ─────────────────
+    ic_failures: list[str] = []
+    ic_total = 0
+
+    for s in stations:
+        sid = s["id"]
+        lf  = s.get("last_frost_doy")
+        ff  = s.get("first_frost_doy")
+        gd  = s.get("growing_days")
+        gdd = s.get("gdd_annual")
+        mmt = s.get("monthly_mean_temps") or []
+
+        ic_total += 1
+
+        lf90 = s.get("last_frost_p90")
+        ff10 = s.get("first_frost_p10")
+        gp10 = s.get("gdd_p10")
+        gp90 = s.get("gdd_p90")
+        gcv  = s.get("gdd_cv")
+        elev = s.get("elevationM", 0)
+
+        if lf is not None and ff is not None and gd is not None:
+            if gd != ff - lf:
+                ic_failures.append(
+                    f"  ✗ {sid} ({s['name']}): growing_days {gd} ≠ {ff}-{lf}={ff-lf}"
+                )
+                _results.append((False, f"IC growing_days math {sid}"))
+            if lf >= ff:
+                ic_failures.append(
+                    f"  ✗ {sid} ({s['name']}): last_frost_doy {lf} ≥ first_frost_doy {ff}"
+                )
+                _results.append((False, f"IC frost order {sid}"))
+            if elev >= 400:
+                # High-altitude stations legitimately have very short seasons
+                if not (1 <= gd <= 280):
+                    ic_failures.append(
+                        f"  ✗ {sid} ({s['name']}): growing_days {gd} outside 1–280 (high-altitude station, elev={elev}m)")
+                    _results.append((False, f"IC growing_days range {sid}"))
+            else:
+                if not (60 <= gd <= 280):
+                    ic_failures.append(f"  ✗ {sid} ({s['name']}): growing_days {gd} outside 60–280")
+                    _results.append((False, f"IC growing_days range {sid}"))
+
+        # Variability field ordering checks
+        if lf is not None and lf90 is not None and lf90 < lf:
+            ic_failures.append(
+                f"  ✗ {sid} ({s['name']}): last_frost_p90 {lf90} < last_frost_doy {lf}"
+            )
+            _results.append((False, f"IC last_frost_p90 order {sid}"))
+        if lf is not None and lf90 is None:
+            ic_failures.append(
+                f"  ✗ {sid} ({s['name']}): last_frost_p90 is null but last_frost_doy is not"
+            )
+            _results.append((False, f"IC last_frost_p90 null {sid}"))
+
+        if ff is not None and ff10 is not None and ff10 > ff:
+            ic_failures.append(
+                f"  ✗ {sid} ({s['name']}): first_frost_p10 {ff10} > first_frost_doy {ff}"
+            )
+            _results.append((False, f"IC first_frost_p10 order {sid}"))
+        if ff is not None and ff10 is None:
+            ic_failures.append(
+                f"  ✗ {sid} ({s['name']}): first_frost_p10 is null but first_frost_doy is not"
+            )
+            _results.append((False, f"IC first_frost_p10 null {sid}"))
+
+        if gdd is not None and not (400 <= gdd <= 2500):
+            ic_failures.append(
+                f"  ✗ {sid} ({s['name']}): gdd_annual {gdd:.0f} outside 400–2500"
+            )
+            _results.append((False, f"IC gdd_annual range {sid}"))
+
+        if gdd is not None:
+            if gp10 is None:
+                ic_failures.append(f"  ✗ {sid} ({s['name']}): gdd_p10 is null but gdd_annual is not")
+                _results.append((False, f"IC gdd_p10 null {sid}"))
+            elif gp10 > gdd:
+                ic_failures.append(f"  ✗ {sid} ({s['name']}): gdd_p10 {gp10:.0f} > gdd_annual {gdd:.0f}")
+                _results.append((False, f"IC gdd_p10 order {sid}"))
+
+            if gp90 is None:
+                ic_failures.append(f"  ✗ {sid} ({s['name']}): gdd_p90 is null but gdd_annual is not")
+                _results.append((False, f"IC gdd_p90 null {sid}"))
+            elif gp90 < gdd:
+                ic_failures.append(f"  ✗ {sid} ({s['name']}): gdd_p90 {gp90:.0f} < gdd_annual {gdd:.0f}")
+                _results.append((False, f"IC gdd_p90 order {sid}"))
+
+            if gcv is None:
+                ic_failures.append(f"  ✗ {sid} ({s['name']}): gdd_cv is null but gdd_annual is not")
+                _results.append((False, f"IC gdd_cv null {sid}"))
+            elif not (0.0 <= gcv <= 0.5):
+                ic_failures.append(f"  ✗ {sid} ({s['name']}): gdd_cv {gcv} outside 0.0–0.5")
+                _results.append((False, f"IC gdd_cv range {sid}"))
+
+        if len(mmt) != 12:
+            ic_failures.append(
+                f"  ✗ {sid} ({s['name']}): monthly_mean_temps has {len(mmt)} values (expected 12)"
+            )
+            _results.append((False, f"IC monthly_mean_temps length {sid}"))
+        elif all(v is not None for v in mmt):
+            if mmt[6] <= mmt[0]:
+                ic_failures.append(
+                    f"  ✗ {sid} ({s['name']}): July ({mmt[6]:.1f}°C) not warmer than January ({mmt[0]:.1f}°C)"
+                )
+                _results.append((False, f"IC July>January {sid}"))
+            summer_max = max(mmt[5:9])
+            winter_min = min(mmt[i] for i in (10, 11, 0, 1, 2))
+            if summer_max - winter_min < 10.0:
+                ic_failures.append(
+                    f"  ✗ {sid} ({s['name']}): seasonal range {summer_max - winter_min:.1f}°C < 10°C"
+                )
+                _results.append((False, f"IC seasonal range {sid}"))
+
+    ic_passed = ic_total - len(ic_failures)
+    if ic_failures:
+        print(f"  ✗ Internal consistency       {ic_passed}/{ic_total} passed ({len(ic_failures)} failures)")
+        for line in ic_failures:
+            print(line)
+    else:
+        print(f"  ✓ Internal consistency       {ic_passed}/{ic_total} passed")
+
+    # ── 6. Reference station checks ───────────────────────────────────────────
+    ref_failures: list[str] = []
+    ref_stations_passed = 0
+
+    for ref in REFERENCE_STATIONS:
+        s = station_by_id.get(ref["id"])
+        station_ok = True
+        if s is None:
+            ref_failures.append(f"  ✗ {ref['name']} (id {ref['id']}) not found in output")
+            _results.append((False, f"Reference station missing {ref['id']}"))
+            station_ok = False
+        else:
+            for field, (lo, hi) in [
+                ("last_frost_doy",  ref["last_frost_doy"]),
+                ("first_frost_doy", ref["first_frost_doy"]),
+                ("growing_days",    ref["growing_days"]),
+                ("gdd_annual",      ref["gdd_annual"]),
+            ]:
+                val = s.get(field)
+                if val is None or not (lo <= val <= hi):
+                    ref_failures.append(
+                        f"  ✗ {ref['name']}: {field}={val} outside validated range {lo}–{hi}"
+                    )
+                    _results.append((False, f"Reference station range {ref['id']} {field}"))
+                    station_ok = False
+        if station_ok:
+            ref_stations_passed += 1
+
+    if ref_failures:
+        print(f"  ✗ Reference station checks   {ref_stations_passed}/3 passed")
+        for line in ref_failures:
+            print(line)
+    else:
+        print(f"  ✓ Reference station checks    3/3 passed")
+
+    # ── 7. Regional coverage ──────────────────────────────────────────────────
+    region_failures: list[str] = []
+
+    for region_name, predicate in REGIONS.items():
+        count = sum(1 for s in stations if predicate(s))
+        if count < 3:
+            region_failures.append(
+                f"  ✗ {region_name}: only {count} station(s) (need ≥ 3)"
+            )
+            _results.append((False, f"Regional coverage {region_name}"))
+
+    if region_failures:
+        covered = len(REGIONS) - len(region_failures)
+        print(f"  ✗ Regional coverage          {covered}/{len(REGIONS)} regions covered")
+        for line in region_failures:
+            print(line)
+    else:
+        print(f"  ✓ Regional coverage           {len(REGIONS)}/{len(REGIONS)} regions covered")
+
+    # ── 8. GDD gradient check (warnings only) ────────────────────────────────
+    gradient_warnings: list[str] = []
+    gradient_total = 0
+
+    for s in stations:
+        if s["id"] == ANCHOR_STATION_ID:
+            continue
+        gdd = s.get("gdd_annual")
+        elev = s.get("elevationM")
+        if gdd is None or elev is None:
+            continue
+        gradient_total += 1
+        expected = (
+            ANCHOR_GDD
+            - GDD_PER_DEGREE_LAT * (s["lat"] - ANCHOR_LAT)
+            - GDD_PER_100M_ELEV  * (elev / 100.0)
+        )
+        if expected <= 0:
+            continue
+        deviation = abs(gdd - expected) / expected
+        if deviation > GRADIENT_TOLERANCE:
+            pct = deviation * 100
+            gradient_warnings.append(
+                f"  ⚠ {s['name']}: GDD {gdd:.0f} deviates {pct:.0f}% from prediction {expected:.0f}"
+            )
+            warn(gradient_warnings[-1])
+
+    gw = len(gradient_warnings)
+    if gw:
+        print(f"  ⚠ GDD gradient check         {gradient_total - gw}/{gradient_total} passed ({gw} warnings)")
+        for line in gradient_warnings:
+            print(line)
+    else:
+        print(f"  ✓ GDD gradient check         {gradient_total}/{gradient_total} passed")
+
+    # ── 9. North-south ordering check (warnings only) ─────────────────────────
+    ns_warnings: list[str] = []
+    by_lat = sorted(
+        [s for s in stations if s.get("gdd_annual") is not None],
+        key=lambda s: s["lat"],
+    )
+
+    for i, south in enumerate(by_lat):
+        for north in by_lat[i + 1:]:
+            if north["lat"] - south["lat"] <= 1.0:
+                continue
+            if north["gdd_annual"] > south["gdd_annual"] * 1.15:
+                msg = (
+                    f"  ⚠ {north['name']} GDD {north['gdd_annual']:.0f} higher than "
+                    f"{south['name']} GDD {south['gdd_annual']:.0f} "
+                    f"despite being {north['lat'] - south['lat']:.1f}° further north"
+                )
+                ns_warnings.append(msg)
+                warn(msg)
+
+    if ns_warnings:
+        print(f"  ⚠ North-south ordering        {len(ns_warnings)} inversion warning(s)")
+        for line in ns_warnings:
+            print(line)
+    else:
+        print(f"  ✓ North-south ordering        no inversions")
+
+    # ── 10. Variability summary ───────────────────────────────────────────────
+    cv_values = [
+        (s["name"], s["gdd_cv"])
+        for s in stations
+        if s.get("gdd_cv") is not None
+    ]
+    low  = [(name, cv) for name, cv in cv_values if cv < 0.08]
+    mid  = [(name, cv) for name, cv in cv_values if 0.08 <= cv <= 0.15]
+    high = [(name, cv) for name, cv in cv_values if cv > 0.15]
+
+    low_ex  = ", ".join(f"{name} ({cv:.2f})" for name, cv in sorted(low,  key=lambda x: x[1])[:2])
+    high_ex = ", ".join(f"{name} ({cv:.2f})" for name, cv in sorted(high, key=lambda x: x[1], reverse=True)[:2])
+
+    print(f"\nVariability summary (gdd_cv):")
+    print(f"  Low  (cv < 0.08):    {len(low):3d} stations" + (f" — e.g. {low_ex}" if low_ex else ""))
+    print(f"  Mid  (cv 0.08–0.15): {len(mid):3d} stations")
+    print(f"  High (cv > 0.15):    {len(high):3d} stations" + (f" — e.g. {high_ex}" if high_ex else ""))
+    if high:
+        print(f"\n  High variability stations should be reviewed — users in these areas")
+        print(f"  will receive a climate uncertainty warning in the application.")
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -263,13 +601,19 @@ def main() -> None:
         expected_ids = {s["id"] for s in source}
 
     run_checks(stations, expected_ids)
+    run_reference_checks(stations)
 
-    passed = sum(1 for ok, _ in _results if ok)
-    failed = sum(1 for ok, _ in _results if not ok)
+    failed   = sum(1 for ok, _ in _results if not ok)
+    n_warn   = len(_warnings)
 
-    print(f"\n{'─' * 45}")
-    print(f"  {passed} passed  /  {failed} failed")
-    print(f"{'─' * 45}")
+    print(f"\n{'─' * 42}")
+    if failed:
+        print(f"FAILED ({failed} failure(s), {n_warn} warning(s))")
+    elif n_warn:
+        print(f"PASSED with {n_warn} warning(s)")
+    else:
+        print("PASSED")
+    print(f"{'─' * 42}")
 
     if failed:
         print("\nValidation FAILED — do not commit output/weather_stations.json")

@@ -9,11 +9,19 @@ across the climate window (current year − 15 through current year − 1).
 Derived fields per station:
     last_frost_doy      — median day-of-year of the last spring frost
                           (last day where daily min temp < 0°C)
+    last_frost_p90      — 90th percentile last spring frost doy; safe transplant
+                          date in 9 out of 10 years
     first_frost_doy     — median day-of-year of the first autumn frost after
                           July 1st (first day where daily min temp < 0°C)
+    first_frost_p10     — 10th percentile first autumn frost doy; safe harvest
+                          deadline in 9 out of 10 years
     growing_days        — first_frost_doy − last_frost_doy
-    gdd_annual          — mean annual growing degree days above 5°C
+    gdd_annual          — median annual growing degree days above 5°C
                           (sum of daily mean − 5°C for days where mean > 5°C)
+    gdd_p10             — 10th percentile GDD; reliable floor nearly always achieved
+    gdd_p90             — 90th percentile GDD; heat accumulation in a warm year
+    gdd_cv              — coefficient of variation (std / mean); dimensionless
+                          variability score used by the API to trigger warnings
     monthly_mean_temps  — array of 12 floats (Jan–Dec), mean daily mean
                           temperature per calendar month across all years
 
@@ -29,6 +37,28 @@ Usage:
     python smhi/derive_normals.py
     make smhi-normals
 """
+
+# Variability metrics (last_frost_p90, first_frost_p10, gdd_p10, gdd_p90, gdd_cv)
+# ─────────────────────────────────────────────────────────────────────────────
+# Median values describe a typical year. Variability metrics describe the spread.
+# A grower in Kiruna faces GDD ranging from 559 to 1014 across years — the median
+# of 816 alone does not communicate this planning risk.
+#
+# Percentiles use a conservative framing:
+#   last_frost_p90  — transplant date safe in 9 of 10 years
+#   first_frost_p10 — harvest deadline safe in 9 of 10 years
+#   gdd_p10         — heat accumulation nearly always achieved
+#   gdd_p90         — heat accumulation in a warm year
+#
+# gdd_cv (coefficient of variation) is the single variability signal consumed
+# by the grow-zone-api to trigger user-facing warnings:
+#   cv > 0.15 → "Growing conditions in your area vary significantly year to year.
+#                We recommend choosing early-maturing varieties as a precaution."
+#
+# The 0.15 threshold was derived from observed data:
+#   Falsterbo cv ~0.07  — reliable maritime south
+#   Stockholm  cv ~0.10 — typical central Sweden
+#   Kiruna     cv ~0.16 — high variability northern continental
 
 import json
 import math
@@ -100,12 +130,14 @@ def derive_station_normals(station: Station) -> WeatherStation | None:
     spring_mask    = (df_min["min_temp"] < 0) & (df_min["month"] < 7)
     spring_frosts  = df_min[spring_mask].groupby("year")["doy"].max()
     last_frost_doy = _nullable_int(spring_frosts.median() if not spring_frosts.empty else None)
+    last_frost_p90 = _nullable_int(spring_frosts.quantile(0.90) if not spring_frosts.empty else None)
 
     # --- First autumn frost ---
     # Per year: first day after July 1st (month >= 7) where min_temp < 0°C.
     autumn_mask    = (df_min["min_temp"] < 0) & (df_min["month"] >= 7)
     autumn_frosts  = df_min[autumn_mask].groupby("year")["doy"].min()
     first_frost_doy = _nullable_int(autumn_frosts.median() if not autumn_frosts.empty else None)
+    first_frost_p10 = _nullable_int(autumn_frosts.quantile(0.10) if not autumn_frosts.empty else None)
 
     print("Autumn frost by year")
     print(autumn_frosts.sort_index().to_string())
@@ -124,7 +156,14 @@ def derive_station_normals(station: Station) -> WeatherStation | None:
         .groupby("year")
         .apply(lambda g: (g["mean_temp"] - 5).sum(), include_groups=False)
     )
-    gdd_annual = _nullable_float(gdd_by_year.mean() if not gdd_by_year.empty else None)
+    gdd_annual = _nullable_float(gdd_by_year.median() if not gdd_by_year.empty else None)
+    gdd_p10    = _nullable_float(gdd_by_year.quantile(0.10) if not gdd_by_year.empty else None)
+    gdd_p90    = _nullable_float(gdd_by_year.quantile(0.90) if not gdd_by_year.empty else None)
+    gdd_cv     = (
+        round(float(gdd_by_year.std() / gdd_by_year.mean()), 2)
+        if not gdd_by_year.empty and gdd_by_year.mean() != 0
+        else None
+    )
 
     print("GDD by year")
     print(gdd_by_year.sort_index().to_string())
@@ -144,9 +183,14 @@ def derive_station_normals(station: Station) -> WeatherStation | None:
         lng=station["lng"],
         elevationM=station["elevationM"],
         last_frost_doy=last_frost_doy,
+        last_frost_p90=last_frost_p90,
         first_frost_doy=first_frost_doy,
+        first_frost_p10=first_frost_p10,
         growing_days=growing_days,
         gdd_annual=gdd_annual,
+        gdd_p10=gdd_p10,
+        gdd_p90=gdd_p90,
+        gdd_cv=gdd_cv,
         monthly_mean_temps=monthly_mean_temps,
     )
 

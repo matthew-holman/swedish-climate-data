@@ -159,4 +159,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    raise Exception("Don't run this unless you know what you are doing.")
     main()

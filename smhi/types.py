@@ -29,7 +29,12 @@ class WeatherStation(TypedDict):
     lng:                 float
     elevationM:          float
     last_frost_doy:      int | None
+    last_frost_p90:      int | None
     first_frost_doy:     int | None
+    first_frost_p10:     int | None
     growing_days:        int | None
     gdd_annual:          float | None
+    gdd_p10:             float | None
+    gdd_p90:             float | None
+    gdd_cv:              float | None
     monthly_mean_temps:  list[float | None]
